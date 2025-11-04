@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: neurohedg
-Version: 0.1.0
-Summary: NeuroHedg Phase 1: Black–Scholes, Greeks, IV
-Requires-Python: >=3.9
-Requires-Dist: numpy>=1.22
-Provides-Extra: dev
-Requires-Dist: pytest>=7.0; extra == "dev"

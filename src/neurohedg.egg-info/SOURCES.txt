@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/neurohedg/__init__.py
-src/neurohedg.egg-info/PKG-INFO
-src/neurohedg.egg-info/SOURCES.txt
-src/neurohedg.egg-info/dependency_links.txt
-src/neurohedg.egg-info/requires.txt
-src/neurohedg.egg-info/top_level.txt
-tests/test_bs_phase1.py
