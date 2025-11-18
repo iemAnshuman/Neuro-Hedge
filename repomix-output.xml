@@ -1,0 +1,687 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+black_scholes.py
+ddpg_agent.py
+evaluate.py
+hedging_env.py
+market_simulator.py
+neuro_hedge_agent_actor.pth
+neuro_hedge_agent_critic.pth
+pnl_distribution.png
+train.py
+training_rewards.png
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="black_scholes.py">
+import numpy as np
+import math
+from scipy.stats import norm
+
+class BlackScholes:
+    
+    @staticmethod
+    def d1(S, K, T, r, sigma):
+        if T <= 0:
+            return np.inf if S > K else -np.inf
+        return (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+
+    @staticmethod
+    def d2(S, K, T, r, sigma, d1_val):
+        if T <= 0:
+            return np.inf
+        return d1_val - sigma * math.sqrt(T)
+
+    @staticmethod
+    def call_price(S, K, T, r, sigma):
+        if T <= 0:
+            return max(0.0, S - K)
+        
+        d1_val = BlackScholes.d1(S, K, T, r, sigma)
+        d2_val = BlackScholes.d2(S, K, T, r, sigma, d1_val)
+        
+        return S * norm.cdf(d1_val) - K * math.exp(-r * T) * norm.cdf(d2_val)
+
+    @staticmethod
+    def call_delta(S, K, T, r, sigma):
+        if T <= 0:
+            return 1.0 if S > K else 0.0
+        
+        d1_val = BlackScholes.d1(S, K, T, r, sigma)
+        return norm.cdf(d1_val)
+
+class EuropeanCallOption:
+    
+    def __init__(self, K, T):
+        self.K = K
+        self.T = T
+        self.name = f"Call_K{K}_T{T}"
+
+    def payoff(self, S_T):
+        return max(0.0, S_T - self.K)
+
+class BlackScholesBaseline:
+    
+    def __init__(self, K, T, r, sigma):
+        self.K = K
+        self.T = T
+        self.r = r
+        self.sigma = sigma
+
+    def get_action(self, t, S_t):
+        time_to_expiry = self.T - t
+        delta = BlackScholes.call_delta(S_t, self.K, time_to_expiry, self.r, self.sigma)
+        return delta
+
+if __name__ == '__main__':
+    S = 100.0
+    K = 100.0
+    T = 1.0
+    r = 0.05
+    sigma = 0.2
+    
+    price = BlackScholes.call_price(S, K, T, r, sigma)
+    delta = BlackScholes.call_delta(S, K, T, r, sigma)
+    
+    print(f"--- Black-Scholes Test ---")
+    print(f"Stock Price: {S}, Strike: {K}, Time: {T}, Vol: {sigma}")
+    print(f"Option Price: {price:.4f}")
+    print(f"Option Delta: {delta:.4f}")
+    
+    option = EuropeanCallOption(K, T)
+    print(f"\nOption Payoff at S=110: {option.payoff(110.0)}")
+    print(f"Option Payoff at S=90: {option.payoff(90.0)}")
+
+    baseline_bot = BlackScholesBaseline(K, T, r, sigma)
+    action_t0 = baseline_bot.get_action(t=0.0, S_t=100.0)
+    action_t_half = baseline_bot.get_action(t=0.5, S_t=110.0)
+
+    print(f"\n--- Baseline Bot Test ---")
+    print(f"Hedge (Delta) at t=0, S=100: {action_t0:.4f}")
+    print(f"Hedge (Delta) at t=0.5, S=110: {action_t_half:.4f}")
+</file>
+
+<file path="ddpg_agent.py">
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import random
+from collections import deque
+
+class ReplayBuffer:
+    def __init__(self, buffer_size, batch_size):
+        self.buffer = deque(maxlen=buffer_size)
+        self.batch_size = batch_size
+
+    def add(self, state, action, reward, next_state, done):
+        experience = (state, action, np.array([reward]), next_state, np.array([done]))
+        self.buffer.append(experience)
+
+    def sample(self):
+        batch = random.sample(self.buffer, self.batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+        
+        return (torch.tensor(np.array(states), dtype=torch.float32),
+                torch.tensor(np.array(actions), dtype=torch.float32),
+                torch.tensor(np.array(rewards), dtype=torch.float32),
+                torch.tensor(np.array(next_states), dtype=torch.float32),
+                torch.tensor(np.array(dones), dtype=torch.float32))
+
+    def __len__(self):
+        return len(self.buffer)
+
+class Actor(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Actor, self).__init__()
+        self.layer_1 = nn.Linear(state_dim, 256)
+        self.layer_2 = nn.Linear(256, 256)
+        self.layer_3 = nn.Linear(256, action_dim)
+
+    def forward(self, state):
+        x = F.relu(self.layer_1(state))
+        x = F.relu(self.layer_2(x))
+        action = torch.sigmoid(self.layer_3(x)) 
+        return action
+
+class Critic(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Critic, self).__init__()
+        self.layer_1 = nn.Linear(state_dim + action_dim, 256)
+        self.layer_2 = nn.Linear(256, 256)
+        self.layer_3 = nn.Linear(256, 1)
+
+    def forward(self, state, action):
+        x = torch.cat([state, action], 1)
+        x = F.relu(self.layer_1(x))
+        x = F.relu(self.layer_2(x))
+        value = self.layer_3(x)
+        return value
+
+class DDPGAgent:
+    def __init__(self, state_dim, action_dim, tau=0.005, gamma=1, lr_actor=1e-4, lr_critic=1e-3):
+        
+        self.actor = Actor(state_dim, action_dim)
+        self.actor_target = Actor(state_dim, action_dim)
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
+
+        self.critic = Critic(state_dim, action_dim)
+        self.critic_target = Critic(state_dim, action_dim)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic)
+
+        self.tau = tau
+        self.gamma = gamma
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+    def select_action(self, state):
+        self.actor.eval()
+        state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            action_t = self.actor(state_t)
+        action = action_t.cpu().numpy().flatten()
+        return np.clip(action, 0.0, 1.0)
+
+    def load(self, filename):
+        self.actor.load_state_dict(torch.load(f"{filename}_actor.pth", map_location=torch.device('cpu')))
+        self.critic.load_state_dict(torch.load(f"{filename}_critic.pth", map_location=torch.device('cpu')))
+        self.actor.eval()
+        self.critic.eval()
+
+
+    def update_parameters(self, replay_buffer):
+        if len(replay_buffer) < replay_buffer.batch_size:
+            return
+
+        states, actions, rewards, next_states, dones = replay_buffer.sample()
+
+        with torch.no_grad():
+            next_actions = self.actor_target(next_states)
+            target_q_values = self.critic_target(next_states, next_actions)
+            target_q = rewards + (self.gamma * target_q_values * (1 - dones))
+        
+        current_q = self.critic(states, actions)
+        
+        critic_loss = F.mse_loss(current_q, target_q)
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
+
+        actor_loss = -self.critic(states, self.actor(states)).mean()
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        self._soft_update(self.actor_target, self.actor)
+        self._soft_update(self.critic_target, self.critic)
+
+    def _soft_update(self, target, source):
+        for target_param, param in zip(target.parameters(), source.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+            
+    def save(self, filename):
+        torch.save(self.actor.state_dict(), f"{filename}_actor.pth")
+        torch.save(self.critic.state_dict(), f"{filename}_critic.pth")
+</file>
+
+<file path="evaluate.py">
+import numpy as np
+import torch
+import math
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from hedging_env import HedgingEnv
+from ddpg_agent import DDPGAgent
+from black_scholes import BlackScholesBaseline
+
+def run_evaluation(env, agent, num_episodes):
+    all_pnls = []
+    all_costs = []
+    all_trade_counts = []
+    
+    is_rl_agent = hasattr(agent, 'select_action')
+    
+    if not is_rl_agent:
+        bs_bot = agent
+    
+    for _ in range(num_episodes):
+        obs, info = env.reset()
+        terminated = False
+        info = {}
+        trade_count = 0
+        
+        while not terminated:
+            if is_rl_agent:
+                raw_action = agent.select_action(obs)
+                action = np.array(raw_action, dtype=np.float32).flatten()
+            else:
+                time_to_expiry, stock_price = obs[0], obs[1]
+                current_time = env.T - time_to_expiry
+                action_delta = bs_bot.get_action(current_time, stock_price)
+                action = np.array([action_delta], dtype=np.float32)
+
+            if abs(action[0] - env.num_shares) > 1e-6:
+                trade_count += 1
+                
+            obs, reward, terminated, truncated, info = env.step(action)
+        
+        final_pnl = info.get('terminal_pnl', 0.0) 
+            
+        all_pnls.append(final_pnl)
+        all_costs.append(env.total_cost)
+        all_trade_counts.append(trade_count)
+        
+    print(f"--- Agent Type: {'DDPG' if is_rl_agent else 'Baseline'} ---")
+    print(f"    Avg. Trades Per Episode: {np.mean(all_trade_counts):.2f}")
+    
+    return all_pnls, all_costs
+
+def evaluate_agent():
+    
+    S0 = 100.0
+    K = 100.0
+    T = 1.0
+    r = 0.05
+    mu = r 
+    sigma = 0.2
+    dt = 1/52 
+    c_rate = 0.002 
+
+    sim_params = {'S0': S0, 'mu': mu, 'sigma': sigma, 'T': T, 'dt': dt}
+    opt_params = {'K': K}
+
+    env = HedgingEnv(sim_params, opt_params, r, c_rate)
+    
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+    
+    
+    rl_agent = DDPGAgent(state_dim, action_dim)
+    try:
+        rl_agent.load("neuro_hedge_agent")
+        print("--- Trained DDPG Agent Loaded ---")
+    except FileNotFoundError:
+        print("--- ERROR: Trained agent files not found! ---")
+        print("--- Please run train.py first! ---")
+        return
+
+    bs_agent = BlackScholesBaseline(K, T, r, sigma)
+    print("--- Black-Scholes Baseline Agent Created ---")
+
+    num_eval_episodes = 1000
+    
+    print(f"--- Running {num_eval_episodes} simulations for DDPG agent... ---")
+    rl_pnls, rl_costs = run_evaluation(env, rl_agent, num_eval_episodes)
+    
+    print(f"--- Running {num_eval_episodes} simulations for Baseline agent... ---")
+    bs_pnls, bs_costs = run_evaluation(env, bs_agent, num_eval_episodes)
+    
+    print("--- Evaluation Complete. Generating results... ---")
+
+    
+    rl_pnl_mean = np.mean(rl_pnls)
+    rl_pnl_std = np.std(rl_pnls)
+    rl_cost_mean = np.mean(rl_costs)
+
+    bs_pnl_mean = np.mean(bs_pnls)
+    bs_pnl_std = np.std(bs_pnls)
+    bs_cost_mean = np.mean(bs_costs)
+    
+    results = {
+        "Strategy": ["Neuro-Hedge (DDPG)", "Black-Scholes (Baseline)"],
+        "Avg. P&L": [rl_pnl_mean, bs_pnl_mean],
+        "P&L Std. Dev. (Risk)": [rl_pnl_std, bs_pnl_std],
+        "Avg. Txn Cost": [rl_cost_mean, bs_cost_mean]
+    }
+    
+    results_df = pd.DataFrame(results)
+    
+    print("\n" + "="*50)
+    print("           HEDGING PERFORMANCE RESULTS")
+    print("="*50)
+    print(results_df.to_string(index=False))
+    print("="*50)
+    print(f"\nNote: Lower 'P&L Std. Dev.' is better (indicates lower risk).")
+    
+    
+    plt.figure(figsize=(12, 6))
+    sns.histplot(rl_pnls, color='blue', label='Neuro-Hedge (DDPG)', kde=True, bins=50)
+    sns.histplot(bs_pnls, color='red', label='Black-Scholes (Baseline)', kde=True, bins=50)
+    plt.title('Distribution of Final P&L (1000 Simulations)', fontsize=16)
+    plt.xlabel('Final P&L')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.axvline(0, color='black', linestyle='--', linewidth=1)
+    plt.savefig('pnl_distribution.png')
+    plt.show()
+
+if __name__ == '__main__':
+    evaluate_agent()
+</file>
+
+<file path="hedging_env.py">
+import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
+import math
+
+from market_simulator import GBMSimulator
+from black_scholes import EuropeanCallOption, BlackScholes
+
+class HedgingEnv(gym.Env):
+    """
+    CORRECT hedging environment with proper cash accounting
+    AND DENSE REWARDS for step-by-step learning.
+    """
+    
+    def __init__(self, simulator_params, option_params, risk_free_rate, transaction_cost_rate):
+        super(HedgingEnv, self).__init__()
+        
+        self.S0 = simulator_params['S0']
+        self.mu = simulator_params['mu']
+        self.sigma = simulator_params['sigma']
+        self.T = simulator_params['T']
+        self.dt = simulator_params['dt']
+        
+        self.K = option_params['K']
+        
+        self.r = risk_free_rate
+        self.c_rate = transaction_cost_rate
+        
+        # --- Hyperparameter for tuning reward ---
+        # This balances the penalty for hedging error vs. transaction costs
+        self.lambda_txn = 0.1
+        
+        self.simulator = GBMSimulator(self.S0, self.mu, self.sigma, self.T, self.dt)
+        self.option = EuropeanCallOption(self.K, self.T)
+        
+        self.n_steps = self.simulator.n_steps
+        self.current_step = 0
+        self.stock_path = []
+        self.current_stock_price = 0.0
+        
+        self.cash = 0.0
+        self.num_shares = 0.0
+        self.total_cost = 0.0
+        self.time = 0.0
+        
+        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        
+        # --- NEW OBSERVATION SPACE ---
+        # The agent MUST see its current position to make a smart decision
+        # [time_to_expiry, stock_price, current_num_shares]
+        self.observation_space = spaces.Box(
+            low=np.array([0.0, 0.0, 0.0], dtype=np.float32), 
+            high=np.array([self.T, np.inf, 1.0], dtype=np.float32), 
+            shape=(3,), 
+            dtype=np.float32
+        )
+        
+        self.initial_cash = BlackScholes.call_price(self.S0, self.K, self.T, self.r, self.sigma)
+
+    def _get_obs(self):
+        time_to_expiry = self.T - self.time
+        obs = np.array([time_to_expiry, self.current_stock_price, self.num_shares], dtype=np.float32)
+        return obs
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        
+        self.stock_path = self.simulator.simulate_path()
+        self.current_step = 0
+        self.time = 0.0
+        self.current_stock_price = self.stock_path[0]
+        
+        self.cash = self.initial_cash
+        self.num_shares = 0.0
+        self.total_cost = 0.0
+        
+        return self._get_obs(), {}
+
+    def step(self, action):
+        new_num_shares = action[0]
+        shares_to_trade = new_num_shares - self.num_shares
+        
+        transaction_cost = abs(shares_to_trade) * self.current_stock_price * self.c_rate
+        
+        cash_flow = -shares_to_trade * self.current_stock_price
+        self.cash += cash_flow
+        self.cash -= transaction_cost
+        self.total_cost += transaction_cost
+        
+        self.num_shares = new_num_shares
+        
+        self.current_step += 1
+        self.time = self.current_step * self.dt
+        
+        self.cash *= (1 + self.r * self.dt)
+        
+        self.current_stock_price = self.stock_path[self.current_step]
+        
+        terminated = (self.current_step == self.n_steps)
+        
+        # --- NEW DENSE REWARD LOGIC ---
+        # Calculate the "correct" hedge (BS Delta)
+        time_to_expiry = self.T - self.time
+        bs_delta = BlackScholes.call_delta(self.current_stock_price, self.K, time_to_expiry, self.r, self.sigma)
+        
+        # 1. Penalty for hedging error (how far are we from "correct"?)
+        hedging_error = self.num_shares - bs_delta
+        reward = -(hedging_error**2)
+        
+        # 2. Penalty for transaction costs
+        reward -= (self.lambda_txn * transaction_cost)
+        
+        info = {}
+        
+        if terminated:
+            # We still calculate terminal P&L for evaluation,
+            # but it is NOT part of the reward signal.
+            self.cash += self.num_shares * self.current_stock_price
+            option_payoff = self.option.payoff(self.current_stock_price)
+            self.cash -= option_payoff
+            
+            terminal_pnl = self.cash - self.initial_cash
+            info['terminal_pnl'] = terminal_pnl
+            
+        return self._get_obs(), reward, terminated, False, info
+</file>
+
+<file path="market_simulator.py">
+import numpy as np
+import math
+
+class GBMSimulator:
+    
+    def __init__(self, S0, mu, sigma, T, dt):
+        self.S0 = S0
+        self.mu = mu
+        self.sigma = sigma
+        self.T = T
+        self.dt = dt
+        self.n_steps = int(T / dt)
+        self.rng = np.random.default_rng()
+
+    def simulate_path(self):
+        path = np.zeros(self.n_steps + 1)
+        path[0] = self.S0
+        
+        drift = (self.mu - 0.5 * self.sigma**2) * self.dt
+        diffusion = self.sigma * math.sqrt(self.dt)
+        
+        Z = self.rng.standard_normal(self.n_steps)
+        
+        for i in range(1, self.n_steps + 1):
+            path[i] = path[i-1] * math.exp(drift + diffusion * Z[i-1])
+            
+        return path
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+
+    S0 = 100.0
+    mu = 0.05
+    sigma = 0.2
+    T = 1.0
+    dt = 1/252
+    
+    simulator = GBMSimulator(S0, mu, sigma, T, dt)
+    
+    plt.figure(figsize=(10, 6))
+    for _ in range(10):
+        path = simulator.simulate_path()
+        plt.plot(path)
+        
+    plt.title('GBM Path Simulations (10 Paths)')
+    plt.xlabel('Time Steps')
+    plt.ylabel('Stock Price')
+    plt.grid(True)
+    plt.show()
+</file>
+
+<file path="train.py">
+import numpy as np
+import torch
+import gymnasium as gym
+from collections import deque
+import matplotlib.pyplot as plt
+
+from hedging_env import HedgingEnv
+from ddpg_agent import DDPGAgent, ReplayBuffer
+
+def train_ddpg():
+    
+    S0 = 100.0
+    K = 100.0
+    T = 1.0
+    r = 0.05
+    mu = r 
+    sigma = 0.2
+    dt = 1/52 
+    c_rate = 0.002 
+
+    sim_params = {'S0': S0, 'mu': mu, 'sigma': sigma, 'T': T, 'dt': dt}
+    opt_params = {'K': K}
+
+    env = HedgingEnv(sim_params, opt_params, r, c_rate)
+    
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+    
+    agent = DDPGAgent(state_dim, action_dim)
+    
+    buffer_size = 1000000
+    batch_size = 256
+    replay_buffer = ReplayBuffer(buffer_size, batch_size)
+    
+    max_episodes = 2000
+    max_steps = env.n_steps
+    
+    noise_std = 0.05
+    
+    rewards_deque = deque(maxlen=100)
+    all_episode_rewards = []
+    
+    print("--- Starting Training ---")
+    
+    for episode in range(max_episodes):
+        obs, info = env.reset()
+        episode_reward = 0
+        
+        for step in range(max_steps):
+            
+            action = agent.select_action(obs)
+            
+            noise = np.random.normal(0, noise_std, size=action_dim)
+            action = np.clip(action + noise, 0.0, 1.0)
+            
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            
+            replay_buffer.add(obs, action, reward, next_obs, terminated)
+            
+            obs = next_obs
+            episode_reward += reward
+            
+            if len(replay_buffer) > batch_size:
+                agent.update_parameters(replay_buffer)
+                
+            if terminated:
+                break
+        
+        rewards_deque.append(episode_reward)
+        all_episode_rewards.append(episode_reward)
+        avg_reward = np.mean(rewards_deque)
+        
+        if (episode + 1) % 100 == 0:
+            print(f"Episode: {episode+1}/{max_episodes} | Avg. Reward (Last 100): {avg_reward:.4f}")
+            
+    print("--- Training Complete ---")
+    
+    agent.save("neuro_hedge_agent")
+    print("--- Agent Saved ---")
+    
+    plt.figure(figsize=(10, 5))
+    plt.plot(all_episode_rewards, label='Episode Reward', alpha=0.6)
+    plt.plot(np.convolve(all_episode_rewards, np.ones(100)/100, mode='valid'), label='Moving Avg (100 episodes)')
+    plt.title('Episode Rewards during Training')
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward (Negative P&L Squared)')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('training_rewards.png')
+    plt.show()
+
+
+if __name__ == '__main__':
+    train_ddpg()
+</file>
+
+</files>
