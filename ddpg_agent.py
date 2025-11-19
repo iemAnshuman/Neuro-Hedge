@@ -75,6 +75,7 @@ class Critic(nn.Module):
         
         # Combined pathway (state + action)
         self.layer_2 = nn.Linear(400 + action_dim, 300)
+        self.bn2 = nn.BatchNorm1d(300) # FIX: Added missing BN layer
         self.layer_3 = nn.Linear(300, 1)
         
         # Initialize weights
@@ -84,7 +85,7 @@ class Critic(nn.Module):
     def forward(self, state, action):
         x = F.relu(self.bn1(self.layer_1(state)))
         x = torch.cat([x, action], 1)
-        x = F.relu(self.layer_2(x))
+        x = F.relu(self.bn2(self.layer_2(x))) # FIX: Apply BN layer
         value = self.layer_3(x)
         return value
 
@@ -109,7 +110,7 @@ class DDPGAgent:
         # FIXED: Add Ornstein-Uhlenbeck noise for better exploration
         self.noise = OUNoise(action_dim)
 
-    def select_action(self, state, add_noise=False):
+    def select_action(self, state, add_noise=False, noise_scale=1.0): # FIX: Added noise_scale argument
         self.actor.eval()
         state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
@@ -117,7 +118,8 @@ class DDPGAgent:
         action = action_t.cpu().numpy().flatten()
         
         if add_noise:
-            action = action + self.noise.sample()
+            # FIX: Apply decaying noise scale to the OU noise sample
+            action = action + self.noise.sample() * noise_scale
             
         return np.clip(action, 0.0, 1.0)
 

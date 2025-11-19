@@ -5,7 +5,7 @@ from collections import deque
 import matplotlib.pyplot as plt
 
 from hedging_env import HedgingEnv
-from ddpg_agent import DDPGAgent, ReplayBuffer
+from ddpg_agent import DDPGAgent, ReplayBuffer # Note: OUNoise is now in ddpg_agent.py
 
 def train_ddpg():
     
@@ -74,13 +74,11 @@ def train_ddpg():
         episode_critic_loss = []
         
         for step in range(max_steps):
-            # FIXED: Use OU noise for exploration
-            action = agent.select_action(obs, add_noise=True)
             
-            # Additional exploration noise that decays
-            if np.random.rand() < 0.1:  # 10% random exploration
-                noise = np.random.normal(0, noise_scale, size=action_dim)
-                action = np.clip(action + noise, 0.0, 1.0)
+            # FIX: Use OU noise for exploration with a decaying scale factor
+            action = agent.select_action(obs, add_noise=True, noise_scale=noise_scale)
+            
+            # The redundant second noise block is removed.
             
             next_obs, reward, terminated, truncated, info = env.step(action)
             

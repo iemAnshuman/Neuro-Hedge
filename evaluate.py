@@ -30,16 +30,18 @@ def run_evaluation(env, agent, num_episodes):
         
         while not terminated:
             if is_rl_agent:
-                # FIXED: No noise during evaluation
                 raw_action = agent.select_action(obs, add_noise=False)
                 action = np.array(raw_action, dtype=np.float32).flatten()
             else:
-                time_to_expiry, stock_price = obs[0], obs[1]
+                # FIX: Handle Normalized Observation
+                # obs[1] is normalized price (S / K), so we multiply by K to get actual price
+                time_to_expiry = obs[0]
+                stock_price = obs[1] * env.K 
+                
                 current_time = env.T - time_to_expiry
                 action_delta = bs_bot.get_action(current_time, stock_price)
                 action = np.array([action_delta], dtype=np.float32)
 
-            # Count meaningful trades (threshold > 0.001)
             if abs(action[0] - prev_position) > 0.001:
                 trade_count += 1
             
@@ -60,7 +62,6 @@ def run_evaluation(env, agent, num_episodes):
     print(f"    Avg. Trades Per Episode: {np.mean(all_trade_counts):.2f}")
     print(f"    Min Trades: {np.min(all_trade_counts)}, Max Trades: {np.max(all_trade_counts)}")
     
-    # Show sample of actions from first episode
     if len(all_actions_history) > 0:
         sample_actions = all_actions_history[0][:10]
         print(f"    Sample actions (first 10 steps): {[f'{a:.3f}' for a in sample_actions]}")
@@ -86,15 +87,18 @@ def evaluate_agent():
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     
-    
     rl_agent = DDPGAgent(state_dim, action_dim)
     try:
-        rl_agent.load("neuro_hedge_agent")
-        print("--- Trained DDPG Agent Loaded ---")
+        rl_agent.load("neuro_hedge_agent_checkpoint_5000")
+        print("--- Trained DDPG Agent Loaded (5000 episodes) ---")
     except FileNotFoundError:
-        print("--- ERROR: Trained agent files not found! ---")
-        print("--- Please run train.py first! ---")
-        return
+        try:
+            rl_agent.load("neuro_hedge_agent")
+            print("--- Trained DDPG Agent Loaded (generic) ---")
+        except FileNotFoundError:
+            print("--- ERROR: Trained agent files not found! ---")
+            print("--- Please run train.py first! ---")
+            return
 
     bs_agent = BlackScholesBaseline(K, T, r, sigma)
     print("--- Black-Scholes Baseline Agent Created ---")
@@ -108,7 +112,6 @@ def evaluate_agent():
     bs_pnls, bs_costs, bs_actions = run_evaluation(env, bs_agent, num_eval_episodes)
     
     print("\n--- Evaluation Complete. Generating results... ---")
-
     
     rl_pnl_mean = np.mean(rl_pnls)
     rl_pnl_std = np.std(rl_pnls)
@@ -141,15 +144,9 @@ def evaluate_agent():
     print("="*80)
     print(results_df.to_string(index=False))
     print("="*80)
-    print("\nInterpretation:")
-    print("- Lower 'P&L Std Dev' indicates more consistent hedging (lower risk)")
-    print("- Median P&L closer to 0 is better (perfect hedge = 0 P&L)")
-    print("- Narrower range (5th to 95th percentile) indicates better risk control")
     
-    # Create comprehensive visualization
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
-    # 1. P&L Distribution
     axes[0, 0].hist(rl_pnls, bins=50, alpha=0.6, label='Neuro-Hedge', color='blue', density=True)
     axes[0, 0].hist(bs_pnls, bins=50, alpha=0.6, label='Black-Scholes', color='red', density=True)
     axes[0, 0].axvline(rl_pnl_mean, color='blue', linestyle='--', linewidth=2, label=f'RL Mean: {rl_pnl_mean:.2f}')
@@ -161,7 +158,6 @@ def evaluate_agent():
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
-    # 2. Box plot comparison
     box_data = [rl_pnls, bs_pnls]
     bp = axes[0, 1].boxplot(box_data, labels=['Neuro-Hedge', 'Black-Scholes'], patch_artist=True)
     bp['boxes'][0].set_facecolor('blue')
@@ -173,7 +169,6 @@ def evaluate_agent():
     axes[0, 1].set_ylabel('Final P&L')
     axes[0, 1].grid(True, alpha=0.3, axis='y')
     
-    # 3. Sample hedging paths
     axes[1, 0].plot(rl_actions[0], label='Neuro-Hedge', alpha=0.7, linewidth=2, color='blue')
     axes[1, 0].plot(bs_actions[0], label='Black-Scholes', alpha=0.7, linewidth=2, color='red')
     axes[1, 0].set_title('Sample Hedging Strategy (Episode 1)', fontsize=14, fontweight='bold')
@@ -183,7 +178,6 @@ def evaluate_agent():
     axes[1, 0].grid(True, alpha=0.3)
     axes[1, 0].set_ylim(0, 1.05)
     
-    # 4. Transaction costs
     axes[1, 1].bar(['Neuro-Hedge', 'Black-Scholes'], [rl_cost_mean, bs_cost_mean], 
                    color=['blue', 'red'], alpha=0.6)
     axes[1, 1].set_title('Average Transaction Costs', fontsize=14, fontweight='bold')

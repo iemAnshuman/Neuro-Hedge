@@ -8,7 +8,7 @@ from black_scholes import EuropeanCallOption, BlackScholes
 
 class HedgingEnv(gym.Env):
     """
-    FIXED hedging environment with proper reward structure
+    FIXED hedging environment with Normalized Inputs and Squared Error Reward.
     """
     
     def __init__(self, simulator_params, option_params, risk_free_rate, transaction_cost_rate):
@@ -25,8 +25,8 @@ class HedgingEnv(gym.Env):
         self.r = risk_free_rate
         self.c_rate = transaction_cost_rate
         
-        # FIXED: Much lower transaction cost penalty
-        self.lambda_txn = 0.001
+        # Penalty factor for transaction costs
+        self.lambda_txn = 0.01
         
         self.simulator = GBMSimulator(self.S0, self.mu, self.sigma, self.T, self.dt)
         self.option = EuropeanCallOption(self.K, self.T)
@@ -43,12 +43,11 @@ class HedgingEnv(gym.Env):
         
         self.action_space = spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         
-        # FIXED: Remove current_num_shares from observation
-        # Agent should not see its current position - prevents "do nothing" learning
+        # Observation space: [time_to_expiry, normalized_stock_price, current_num_shares]
         self.observation_space = spaces.Box(
-            low=np.array([0.0, 0.0], dtype=np.float32), 
-            high=np.array([self.T, np.inf], dtype=np.float32), 
-            shape=(2,), 
+            low=np.array([0.0, 0.0, 0.0], dtype=np.float32), 
+            high=np.array([self.T, np.inf, 1.0], dtype=np.float32), 
+            shape=(3,), 
             dtype=np.float32
         )
         
@@ -56,8 +55,11 @@ class HedgingEnv(gym.Env):
 
     def _get_obs(self):
         time_to_expiry = self.T - self.time
-        # FIXED: Only return time and price, not current position
-        obs = np.array([time_to_expiry, self.current_stock_price], dtype=np.float32)
+        
+        # FIX: Normalize stock price relative to Strike Price (K)
+        norm_stock_price = self.current_stock_price / self.K
+        
+        obs = np.array([time_to_expiry, norm_stock_price, self.num_shares], dtype=np.float32)
         return obs
 
     def reset(self, seed=None, options=None):
@@ -70,10 +72,10 @@ class HedgingEnv(gym.Env):
         
         self.cash = self.initial_cash
         
-        # FIXED: Start with Black-Scholes delta position instead of 0
+        # Start with Black-Scholes delta position
         bs_delta = BlackScholes.call_delta(self.current_stock_price, self.K, self.T, self.r, self.sigma)
         self.num_shares = bs_delta
-        self.cash -= bs_delta * self.current_stock_price  # Pay for initial position
+        self.cash -= bs_delta * self.current_stock_price
         
         self.total_cost = 0.0
         
@@ -101,11 +103,9 @@ class HedgingEnv(gym.Env):
         
         terminated = (self.current_step == self.n_steps)
         
-        # Calculate the portfolio value change for reward
-        # This is the change in hedging portfolio value
+        # --- Reward Calculation ---
         portfolio_value = self.num_shares * self.current_stock_price + self.cash
         
-        # Calculate what the option is worth now
         time_to_expiry = self.T - self.time
         if time_to_expiry > 0:
             option_value = BlackScholes.call_price(
@@ -114,22 +114,19 @@ class HedgingEnv(gym.Env):
         else:
             option_value = self.option.payoff(self.current_stock_price)
         
-        # The hedging error is the difference between our hedge portfolio and option value
-        # We want to minimize this
-        hedging_error = abs(portfolio_value - option_value - self.initial_cash)
+        hedging_error = portfolio_value - option_value - self.initial_cash
         
-        # FIXED: Better reward structure
-        # Primary goal: minimize hedging error
-        # Secondary: minimize transaction costs
-        reward = -hedging_error - (self.lambda_txn * transaction_cost)
+        # Use Squared Error.
+        reward = -(hedging_error**2)
         
-        # Normalize reward to reasonable scale
-        reward = reward / self.S0
+        # Secondary penalty for transaction costs
+        reward -= (self.lambda_txn * transaction_cost)
+        
+        # FIX: Removed reward normalization (division by 10.0) to boost training signal.
         
         info = {}
         
         if terminated:
-            # Calculate final P&L
             self.cash += self.num_shares * self.current_stock_price
             option_payoff = self.option.payoff(self.current_stock_price)
             self.cash -= option_payoff
