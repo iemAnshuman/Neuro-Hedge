@@ -43,7 +43,7 @@ class HedgingEnv(gym.Env):
         
         self.action_space = spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         
-        # Observation space: [time_to_expiry, normalized_stock_price, current_num_shares]
+        # Update shape to 3 to include num_shares
         self.observation_space = spaces.Box(
             low=np.array([0.0, 0.0, 0.0], dtype=np.float32), 
             high=np.array([self.T, np.inf, 1.0], dtype=np.float32), 
@@ -55,11 +55,10 @@ class HedgingEnv(gym.Env):
 
     def _get_obs(self):
         time_to_expiry = self.T - self.time
+        normalized_price = self.current_stock_price / self.K
         
-        # FIX: Normalize stock price relative to Strike Price (K)
-        norm_stock_price = self.current_stock_price / self.K
-        
-        obs = np.array([time_to_expiry, norm_stock_price, self.num_shares], dtype=np.float32)
+        # Include current position so agent can manage transaction costs
+        obs = np.array([time_to_expiry, normalized_price, self.num_shares], dtype=np.float32)
         return obs
 
     def reset(self, seed=None, options=None):
