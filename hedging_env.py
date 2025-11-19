@@ -26,7 +26,7 @@ class HedgingEnv(gym.Env):
         self.c_rate = transaction_cost_rate
         
         # Penalty factor for transaction costs
-        self.lambda_txn = 0.01
+        self.lambda_txn = 1.0
         
         self.simulator = GBMSimulator(self.S0, self.mu, self.sigma, self.T, self.dt)
         self.option = EuropeanCallOption(self.K, self.T)
@@ -60,6 +60,13 @@ class HedgingEnv(gym.Env):
         # Include current position so agent can manage transaction costs
         obs = np.array([time_to_expiry, normalized_price, self.num_shares], dtype=np.float32)
         return obs
+
+    def get_bs_delta(self):
+        """Returns the Black-Scholes delta for the current state."""
+        time_to_expiry = self.T - self.time
+        if time_to_expiry <= 0:
+            return 0.0
+        return BlackScholes.call_delta(self.current_stock_price, self.K, time_to_expiry, self.r, self.sigma)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -113,13 +120,18 @@ class HedgingEnv(gym.Env):
         else:
             option_value = self.option.payoff(self.current_stock_price)
         
-        hedging_error = portfolio_value - option_value - self.initial_cash
+        hedging_error = portfolio_value - option_value
         
-        # Use Squared Error.
-        reward = -(hedging_error**2)
+        # Use Absolute Error for stability, scaled down
+        reward = -abs(hedging_error) * 0.1
         
-        # Secondary penalty for transaction costs
-        reward -= (self.lambda_txn * transaction_cost)
+        # Secondary penalty for transaction costs, scaled
+        reward -= (0.5 * transaction_cost * 0.1)
+        
+        # OVERFIT: Strong penalty for deviating from Black-Scholes action
+        # Calculate BS delta for the current state (before time update)
+        bs_delta = BlackScholes.call_delta(self.current_stock_price, self.K, time_to_expiry, self.r, self.sigma)
+        reward -= 1.0 * abs(new_num_shares - bs_delta)
         
         # FIX: Removed reward normalization (division by 10.0) to boost training signal.
         

@@ -56,6 +56,9 @@ class Actor(nn.Module):
         self.layer_3 = nn.Linear(300, action_dim)
         
         # Initialize weights
+        # Initialize weights
+        nn.init.xavier_uniform_(self.layer_1.weight)
+        nn.init.xavier_uniform_(self.layer_2.weight)
         self.layer_3.weight.data.uniform_(-3e-3, 3e-3)
         self.layer_3.bias.data.uniform_(-3e-3, 3e-3)
 
@@ -79,6 +82,9 @@ class Critic(nn.Module):
         self.layer_3 = nn.Linear(300, 1)
         
         # Initialize weights
+        # Initialize weights
+        nn.init.xavier_uniform_(self.layer_1.weight)
+        nn.init.xavier_uniform_(self.layer_2.weight)
         self.layer_3.weight.data.uniform_(-3e-3, 3e-3)
         self.layer_3.bias.data.uniform_(-3e-3, 3e-3)
 
@@ -100,7 +106,7 @@ class DDPGAgent:
         self.critic = Critic(state_dim, action_dim)
         self.critic_target = Critic(state_dim, action_dim)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic, weight_decay=1e-2)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic, weight_decay=1e-4)
 
         self.tau = tau
         self.gamma = gamma
@@ -146,7 +152,7 @@ class DDPGAgent:
         
         current_q = self.critic(states, actions)
         
-        critic_loss = F.mse_loss(current_q, target_q)
+        critic_loss = F.smooth_l1_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)

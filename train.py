@@ -26,11 +26,11 @@ def train_ddpg():
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     
-    # FIXED: Better hyperparameters
-    agent = DDPGAgent(state_dim, action_dim, tau=0.001, gamma=0.99, lr_actor=1e-4, lr_critic=1e-3)
+    # FIXED: Better hyperparameters (Lower LR for stability)
+    agent = DDPGAgent(state_dim, action_dim, tau=0.001, gamma=0.99, lr_actor=5e-5, lr_critic=5e-4)
     
     buffer_size = 1000000
-    batch_size = 128  # Reduced batch size for more frequent updates
+    batch_size = 256  # Increased batch size for stability
     replay_buffer = ReplayBuffer(buffer_size, batch_size)
     
     # FIXED: More training episodes
@@ -42,6 +42,11 @@ def train_ddpg():
     noise_end = 0.05
     noise_decay = 0.9995
     noise_scale = noise_start
+    
+    # FIXED: Teacher Forcing (Imitation Learning) parameters
+    teacher_forcing_ratio = 1.0
+    teacher_forcing_decay = 0.9995 # Slower decay for overfitting
+    teacher_forcing_min = 0.0
     
     rewards_deque = deque(maxlen=100)
     all_episode_rewards = []
@@ -75,8 +80,14 @@ def train_ddpg():
         
         for step in range(max_steps):
             
-            # FIX: Use OU noise for exploration with a decaying scale factor
-            action = agent.select_action(obs, add_noise=True, noise_scale=noise_scale)
+            # FIXED: Teacher Forcing / Exploration
+            if np.random.random() < teacher_forcing_ratio:
+                # Use Black-Scholes action (Teacher)
+                bs_delta = env.get_bs_delta()
+                action = np.array([bs_delta], dtype=np.float32)
+            else:
+                # Use Agent action (Student) with noise
+                action = agent.select_action(obs, add_noise=True, noise_scale=noise_scale)
             
             # The redundant second noise block is removed.
             
@@ -100,6 +111,9 @@ def train_ddpg():
         # Decay exploration noise
         noise_scale = max(noise_end, noise_scale * noise_decay)
         
+        # Decay teacher forcing
+        teacher_forcing_ratio = max(teacher_forcing_min, teacher_forcing_ratio * teacher_forcing_decay)
+        
         rewards_deque.append(episode_reward)
         all_episode_rewards.append(episode_reward)
         
@@ -110,7 +124,9 @@ def train_ddpg():
         avg_reward = np.mean(rewards_deque)
         
         if (episode + 1) % 100 == 0:
-            print(f"Episode: {episode+1}/{max_episodes} | Avg. Reward: {avg_reward:.4f} | Noise: {noise_scale:.4f}")
+            avg_actor_loss = np.mean(episode_actor_loss) if episode_actor_loss else 0
+            avg_critic_loss = np.mean(episode_critic_loss) if episode_critic_loss else 0
+            print(f"Episode: {episode+1}/{max_episodes} | Avg. Reward: {avg_reward:.4f} | Noise: {noise_scale:.4f} | Teacher: {teacher_forcing_ratio:.4f} | A-Loss: {avg_actor_loss:.4f} | C-Loss: {avg_critic_loss:.4f}")
             
         # Save checkpoint every 1000 episodes
         if (episode + 1) % 1000 == 0:
@@ -147,7 +163,7 @@ def train_ddpg():
     
     plt.tight_layout()
     plt.savefig('training_rewards.png', dpi=300)
-    plt.show()
+    # plt.show()
     
     print("\n--- Training metrics saved to training_rewards.png ---")
 
